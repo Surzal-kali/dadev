@@ -1,0 +1,4 @@
+*.sqlite3
+owui/__pycache__/
+dockered/.env
+dockered/jupyter-nbi/mcp.json

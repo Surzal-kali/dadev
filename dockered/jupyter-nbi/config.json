@@ -1,0 +1,18 @@
+{
+  "default_chat_mode": "ask",
+  "chat_model": {
+    "provider": "ollama",
+    "model": "glm-4.7-flash:latest",
+    "properties": []
+  },
+  "inline_completion_model": {
+    "provider": "github-copilot",
+    "model": "gpt-4o-copilot",
+    "properties": []
+  },
+  "inline_completion_debouncer_delay": 200,
+  "store_github_access_token": false,
+  "chatbook_execution_mode": "auto-run",
+  "chatbook_llm_danger_scan": false,
+  "chatbook_backend_kernel": "daharness"
+}
