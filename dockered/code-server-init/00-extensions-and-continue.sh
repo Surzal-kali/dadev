@@ -41,7 +41,7 @@ EXTS=(
 CS_BIN="$(command -v code-server || echo /app/code-server/bin/code-server)"
 CS_DATA_DIR=/config/data
 CS_EXT_DIR=/config/extensions
-OLLAMA_BASE="${OLLAMA_BASE_URL:-http://192.168.56.1:11434}"
+OLLAMA_BASE="${OLLAMA_BASE_URL:-http://10.0.0.245:11434}"
 
 # The Extensions VIEW has no registry wired up unless product.json carries
 # an "extensionsGallery" block — coder ships this build WITHOUT one, so the

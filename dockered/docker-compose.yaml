@@ -47,14 +47,18 @@ services:
     # release newer than v0.11.3 ships (0.11.4+).
     image: ghcr.io/open-webui/open-webui:dev
     ports:
-      - "3000:8080"
+      # LAN-only bind: 10.0.0.42 is the host's 10.x lab lane (eth1); the
+      # 3000 socket does NOT listen on 192.168.56.x or localhost anymore.
+      - "10.0.0.42:3000:8080"
     networks:
       workbench:
         ipv4_address: 172.28.0.30
     volumes:
       - open-webui-data:/app/backend/data
     environment:
-      - OLLAMA_BASE_URL=http://192.168.56.1:11434
+      # Ollama runs on the LAN at 10.0.0.245; the old 192.168.56.1 lab-switch
+      # address depended on the 192 lane.
+      - OLLAMA_BASE_URL=http://10.0.0.245:11434
       - OPEN_TERMINAL_API_KEY=${OPEN_TERMINAL_API_KEY}
       - WEBUI_URL_PREFIX=${WEBUI_URL_PREFIX}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
@@ -169,9 +173,9 @@ services:
       - FRAMEWORK_GATEWAY_URL=http://open-terminal:6000
       - JUPYTER_MAPPINGKERNELMANAGER_DEFAULT_KERNEL_NAME=daharness
       # notebook-intelligence's native Ollama provider (and the `ollama` SDK
-      # it drives) default to localhost:11434, but Ollama runs on the host
-      # lab lane — same address the open-webui service uses for its LLM.
-      - OLLAMA_HOST=http://192.168.56.1:11434
+      # it drives) default to localhost:11434, but Ollama runs on the LAN at
+      # 10.0.0.245 — same address the open-webui service uses for its LLM.
+      - OLLAMA_HOST=http://10.0.0.245:11434
       # Host lane wiring (post-.deb): Brain socket + the daemon's shared
       # state root — see the PATH-identical mounts above + header start order.
       - BRAIN_SOCKET=/run/daharness/brain.sock
@@ -275,7 +279,7 @@ services:
       - PUID=1000 # kali host UID — same-uid access to the bind-mounted tree
       - PGID=1000
       - PASSWORD=${CODE_SERVER_PASSWORD:?set CODE_SERVER_PASSWORD in dockered/.env}
-      - OLLAMA_BASE_URL=http://192.168.56.1:11434 # read by the init script when provisioning Continue
+      - OLLAMA_BASE_URL=http://10.0.0.245:11434 # read by the init script when provisioning Continue
       - DEFAULT_WORKSPACE=/config/workspace # editor boots opened on the workspace (the live build tree)
       # Docker lane: the CLI (docker.io + docker-compose-v2, baked in
       # code-server.Dockerfile) talks to the HOST daemon via the shared
