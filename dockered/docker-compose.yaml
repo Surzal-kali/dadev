@@ -198,7 +198,7 @@ services:
       - --ServerApp.root_dir=/home/jovyan/work
       - --MappingKernelManager.default_kernel_name=daharness
     group_add:
-      - "120" # host daharness GID — group rwx on /run/daharness (0770) + /var/lib/daharness (2770 setgid)
+      - "119" # host daharness GID — group rwx on /run/daharness (0770) + /var/lib/daharness (2770 setgid)
     # Custom healthcheck — two reasons we don't use the base image's
     # docker_healthcheck.py here:
     #   1. The stock script's ~1s budget can't cover this image (nbi + MCP
