@@ -1,5 +1,23 @@
 # Lab DNS — one hostname list for kali + containers
 
+> **Status: DECOMMISSIONED on this host (2026-11-18).** No dnsmasq runs on
+> kali anymore, and the compose `dns: 172.28.0.1` pins are gone. The jupyter
+> service now rides the internal workbench network (the kernel-lane sandbox:
+> no routed egress) — the only DNS path left there is Docker's embedded
+> resolver forwarding via the host's own upstream, so public names still
+> resolve container-side and lab names no longer do (they never needed to:
+> target resolution belongs to the host-side Brain executor and kali's
+> /etc/hosts). The doc below is retained as the re-enable reference — the
+> reprovision script still exists in the dadeb tree
+> (`packaging/reference/lab-dns-setup.sh`); re-enabling means reinstalling
+> it and re-adding the `dns:` entry to the jupyter service.
+>
+> Known residual: that host-resolver forwarding path is a covert-DNS channel
+> out of the internal network (data encoded in queried names exits unfiltered
+> through the host's resolver). Killing it means either a dnsmasq instance
+> with NO upstream forwarder bound on the bridge gateway, or an nft rule
+> filtering UDP/53 from the bridge subnet.
+
 Shared lab hostname resolution across execution lanes (lab-environment
 setup, not part of the deb; the reprovision script lives in
 `packaging/reference/lab-dns-setup.sh`). Built 2026-10-17
