@@ -1,25 +1,34 @@
 # =============================================================================
-# Framework workbench: JupyterLab (daharness kernel lane)
+# Framework workbench: Open WebUI + JupyterLab (daharness kernel lane)
 #
-# Trimmed 2026-11-18 to the single jupyter service — the open-webui chat
-# front end now runs on its own machine (it reaches this lane through the
-# published 8888) and code-server was unused; both went, along with their
-# egress/devnet adapters. The remaining workbench network is INTERNAL:
-# the kernel container has no routed egress at all. That is deliberate —
-# the notebook lane is a compute sandbox whose only sanctioned outbound
-# path is the Brain UDS socket (/run/daharness/brain.sock, a filesystem
-# path, untouched by network namespaces), with every framework tool
-# executing HOST-side through the executor's scope gate. Host-bound
+# 2026-11-18 transplant: open-webui moved back in from the retired
+# /home/surzal/daharness/dockered stack. code-server stays retired — the
+# trimmed shape is jupyter + jupyter-gate + open-webui only.
+#
+# The workbench network stays INTERNAL: the kernel container has no routed
+# egress at all — the notebook lane is a compute sandbox whose only
+# sanctioned outbound path is the Brain UDS socket (/run/daharness/brain.sock,
+# a filesystem path, untouched by network namespaces), with every framework
+# tool executing HOST-side through the executor's scope gate. Host-bound
 # addresses still work from an internal network: the workbench bridge
 # gateway 172.28.0.1 reaches the host's daharness-pg cluster (:5433).
-# INBOUND is the other direction — Docker does NOT program NAT/port
-# publishing for containers on an internal network, so a `ports:` entry
-# on the jupyter service is silently ignored (observed 2026-11-18:
-# PORTS={} in docker inspect, no docker-proxy, 8888 dead from every lane).
-# The remote Open WebUI's 8888 rides instead through the jupyter-gate
-# nginx sidecar below, which straddles workbench (internal) + mgmt
-# (published): a static inbound-only proxy with no exec surface — the
-# sandbox boundary (jupyter has no egress) is untouched.
+#
+# open-webui is the only service that straddles planes (same pattern as
+# jupyter-gate): workbench (internal) for the direct code-interpreter lane
+# to jupyter:8888, mgmt LAST so it wins the default route — egress to the
+# host-lane Ollama (10.0.0.245:11434) must NAT through mgmt; an
+# internal-network default route would plain-route into the host and break
+# SNAT for the LAN. Its 3000 publishes via mgmt (NAT is not programmed on
+# internal networks — see jupyter's NOTE below).
+#
+# INBOUND: Docker does NOT program NAT/port publishing for containers on an
+# internal network, so a `ports:` entry on the jupyter service is silently
+# ignored (observed 2026-11-18: PORTS={} in docker inspect, no
+# docker-proxy). The browser 8888 rides through the jupyter-gate nginx
+# sidecar, a static inbound-only proxy with no exec surface — the sandbox
+# boundary (jupyter has no egress) is untouched. The open-webui
+# server-to-server lane bypasses the gate entirely (docker DNS on the
+# internal bridge) — the gate is for browsers only.
 #
 # The framework ships as the daharness .deb: code tree bind-mounted from
 # /usr/share/daharness, Brain socket /run/daharness/brain.sock, shared state
@@ -37,13 +46,16 @@
 # brain.sock ENOENT — observed 2026-10-21). Fix: docker compose up -d
 # --force-recreate jupyter after any full stop.
 #
-# JupyterLab:  http://<host>:8888         (tool nursery + OWUI code-execution lane; served through jupyter-gate; JUPYTER_TOKEN)
+# JupyterLab:  http://<host>:8888         (tool nursery; served through jupyter-gate; JUPYTER_TOKEN)
+# Open WebUI:  http://<host>:3000         (chat front end; LLM = host Ollama @ 10.0.0.245:11434;
+#                                          code-execution lane = jupyter over the internal bridge,
+#                                          CODE_INTERPRETER_JUPYTER_* env shared with JUPYTER_TOKEN)
 #
 #   cd dockered
 #   docker compose build && docker compose up -d
 #
 # Tokens live in dockered/.env (gitignored; see .git/info/exclude too).
-# =============================================================================
+# ==============================================================================
 services:
   # ─────────────────────────────────────────────────────────────────────────
   # JupyterLab — notebook/code-execution workbench.
@@ -154,6 +166,25 @@ services:
       # inside a container, costing one timeout per connect).
       - HARNESS_DB_HOST=172.28.0.1
       - HARNESS_DB_PORT=5433
+      # The engagement lane authenticates per-DB-role; host lanes get the
+      # minted lane passwords via the systemd units' EnvironmentFile
+      # (/etc/daharness/pg.env, root:daharness 0640 — never the compose
+      # .env: that file is the gitignored repo-local secret store, while
+      # pg.env is operator-managed on the host). `daharness-pg init`
+      # default passwords (harness_*_change_me) are placeholders — the
+      # live cluster rolls random hex per lane, so the kernel lane must
+      # carry the real repl_lane value or every dispatch journals
+      # "password authentication failed" (observed 2026-11-19 from every
+      # open-webui execute_code kernel run). Only the REPL lane's
+      # credential is passed through: the kernel is agent-executed code
+      # and can read its own env, so brain/gateway/operator secrets stay
+      # host-side (engagement.purge() would no longer be operator-only).
+      - HARNESS_DB_PASSWORD_REPL=${JUPYTER_LANE_HARNESS_DB_PASSWORD_REPL}
+      # Lane role pin: the kernel entry point infers repl_lane anyway
+      # (see utils.engagement._infer_lane_from_entrypoint); pinning it
+      # keeps attribution explicit and immune to future entry-point
+      # renames.
+      - HARNESS_DB_LANE=repl_lane
     command:
       - start-notebook.py
       - --ServerApp.ip=0.0.0.0
@@ -162,7 +193,9 @@ services:
       - --ServerApp.root_dir=/home/jovyan/work
       - --MappingKernelManager.default_kernel_name=daharness
     group_add:
-      - "119" # host daharness GID — group rwx on /run/daharness (0770) + /var/lib/daharness (2770 setgid)
+      - "125" # host daharness GID (getent group daharness) — group rwx on /run
+              # and /var/lib daharness dirs (0770/2770 setgid). The old 119 was
+              # stale (pre-.deb value; 119 is nm-openvpn).
     # Custom healthcheck — two reasons we don't use the base image's
     # docker_healthcheck.py here:
     #   1. The stock script's ~1s budget can't cover this image (nbi + MCP
@@ -220,6 +253,76 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # open-webui — chat front end, transplanted back from the retired
+  # daharness/dockered stack (2026-11-18; code-server stays retired).
+  #
+  # Straddle (same pattern as jupyter-gate): attached to workbench FIRST
+  # (internal bridge — the code-interpreter lane talks to jupyter:8888
+  # directly via docker DNS, no gate hop, server-to-server with ?token=)
+  # and mgmt LAST (wins the default route → egress to the host-lane Ollama
+  # at 10.0.0.245:11434 NATs correctly; an internal-network default route
+  # would plain-route into the host and destroy Ollama reachability).
+  # Its 3000 publishes via mgmt only. RAG embedding offloaded to Ollama; the
+  # built-in sentence-transformers model (~500MB RSS at boot, kept growing —
+  # host OOM-killer shot it once) stays disabled. A 4g Docker mem limit makes
+  # any future bloat deterministic (container restart) instead of a kernel
+  # OOM killing a random victim. pinned to :dev — v0.11.3 stable ships a
+  # broken interactive-terminal (WebSocket header) attach; :dev fixes it
+  # (open-webui#29787); revisit when stable > v0.11.3.
+  # ─────────────────────────────────────────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:dev
+    depends_on:
+      - jupyter
+      - jupyter-gate
+    ports:
+      - "3000:8080"
+    networks:
+      workbench:
+        ipv4_address: 172.28.0.30
+      # Attached after workbench → wins the default route for egress
+      # (Ollama). Same reasoning as jupyter-gate's mgmt attachment.
+      mgmt:
+    volumes:
+      - open-webui-data:/app/backend/data
+    environment:
+      # LLM backend: Ollama on the host lab lane (same address the old
+      # daharness compose used; verified reachable from this host).
+      - OLLAMA_BASE_URL=http://10.0.0.245:11434
+      # Jupyter code-interpreter/execution lane. CODE_INTERPRETER_* inherits
+      # from CODE_EXECUTION_* (verified in OWUI config.py), so the generic
+      # vars carry both. ENV only seeds the FIRST boot's config (the webui.db
+      # row wins afterwards), but the copied DB has no persisted code-interp
+      # keys, so these are authoritative.
+      - CODE_INTERPRETER_ENGINE=jupyter
+      - CODE_EXECUTION_JUPYTER_URL=http://jupyter:8888
+      # Same token as the jupyter service (single .env var). OWUI's client
+      # sends it as ?token= (code_interpreter.py: params.update({'token':}))
+      # — matching --ServerApp.token; no Origin is sent server-side so the
+      # gate's $http_host fix isn't needed on this lane.
+      - CODE_EXECUTION_JUPYTER_AUTH=token
+      - CODE_EXECUTION_JUPYTER_AUTH_TOKEN=${JUPYTER_TOKEN}
+      - CODE_EXECUTION_JUPYTER_TIMEOUT=600
+      # Legacy session secret carried over from the old stack (extracted
+      # live; .env is gitignored) so the copied webui.db stays coherent.
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - WEBUI_URL_PREFIX=${WEBUI_URL_PREFIX}
+      # Reduce memory pressure: disable the built-in sentence-transformers
+      # embedding model and offload RAG embeddings to the Ollama API.
+      - RAG_EMBEDDING_ENGINE=ollama
+      - RAG_EMBEDDING_BATCH_SIZE=50
+    # Memory limit: container restart instead of host OOM-killer roulette.
+    mem_limit: 4g
+    memswap_limit: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
 networks:
   # INTERNAL: no default-route/NAT off the bridge — that IS the sandbox
   # boundary for the kernel lane. Host-bound destinations (the bridge
@@ -240,9 +343,12 @@ networks:
       config:
         - subnet: 172.28.0.0/24
   # Plain NAT bridge, NOT internal — exists only because NAT (and thus
-  # port publishing) is not programmed on internal networks. Inbound-only
-  # purpose for now (the gate's published 8888). Attach this to a future
-  # service only when it needs INBOUND exposure; the kernel lane never
-  # gets an adapter here.
+  # port publishing) is not programmed on internal networks. Two purposes:
+  # the gate's published 8888 (browsers → jupyter) and open-webui's
+  # published 3000 + Ollama egress. The kernel lane never gets an adapter
+  # here.
   mgmt:
     driver: bridge
+
+volumes:
+  open-webui-data:
