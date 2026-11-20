@@ -2,7 +2,7 @@
 title: Framework Bridge (daharness gateway)
 author: framework
 description: Search + execute the framework's gated tool registry via the API gateway, with per-chat session isolation and framework memory access. Bug-bounty chat surface for Open Web UI.
-version: 0.3.3
+version: 0.3.4
 """
 
 import json
@@ -11,6 +11,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 
 from pydantic import BaseModel, Field
 
@@ -293,6 +294,47 @@ class Tools:
         if chat:
             payload["turn_key"] = f"{chat}:{message_id}" if message_id else str(chat)
         return self._post("/scratch/search", payload)
+
+    def framework_scratch_list(
+        self,
+        agent_id: str = "",
+        limit: int = 20,
+        __model__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """List recent entries in the framework scratch store.
+
+        Returns metadata only (scratch references, timestamps, sizes, and
+        ownership); use framework_scratch_search to retrieve a payload.
+
+        :param agent_id: Leave empty to list entries owned by this chat's
+            derived agent id. Pass an explicit agent_id to inspect that
+            agent's entries.
+        :param limit: Maximum number of recent entries to return.
+        """
+        limit = max(1, min(limit, 100))
+        payload = {
+            "agent_id": agent_id or self._chat_agent_id(__model__, __metadata__),
+            "limit": limit,
+        }
+        return self._get("/scratch/list?" + urlencode(payload))
+
+    def framework_scratch_stats(
+        self,
+        agent_id: str = "",
+        __model__: dict | None = None,
+        __metadata__: dict | None = None,
+    ) -> str:
+        """Report scratch-store statistics.
+
+        :param agent_id: Leave empty to report statistics for this chat's
+            derived agent id. Pass an explicit agent_id to inspect that
+            agent's statistics.
+        """
+        resolved_agent_id = agent_id or self._chat_agent_id(
+            __model__, __metadata__
+        )
+        return self._get("/scratch/stats?" + urlencode({"agent_id": resolved_agent_id}))
 
     def framework_memory_search(
         self, query_text: str, namespace: str, agent_id: str = ""
