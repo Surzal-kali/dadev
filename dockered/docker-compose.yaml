@@ -16,7 +16,7 @@
 # open-webui is the only service that straddles planes (same pattern as
 # jupyter-gate): workbench (internal) for the direct code-interpreter lane
 # to jupyter:8888, mgmt LAST so it wins the default route — egress to the
-# host-lane Ollama (10.0.0.245:11434) must NAT through mgmt; an
+# host-lane Ollama must NAT through mgmt; an
 # internal-network default route would plain-route into the host and break
 # SNAT for the LAN. Its 3000 publishes via mgmt (NAT is not programmed on
 # internal networks — see jupyter's NOTE below).
@@ -47,7 +47,7 @@
 # --force-recreate jupyter after any full stop.
 #
 # JupyterLab:  http://<host>:8888         (tool nursery; served through jupyter-gate; JUPYTER_TOKEN)
-# Open WebUI:  http://<host>:3000         (chat front end; LLM = host Ollama @ 10.0.0.245:11434;
+# Open WebUI:  http://<host>:3000         (chat front end; LLM configured in Open WebUI;
 #                                          code-execution lane = jupyter over the internal bridge,
 #                                          CODE_INTERPRETER_JUPYTER_* env shared with JUPYTER_TOKEN)
 #
@@ -282,14 +282,11 @@ services:
       workbench:
         ipv4_address: 172.28.0.30
       # Attached after workbench → wins the default route for egress
-      # (Ollama). Same reasoning as jupyter-gate's mgmt attachment.
+      # (host LAN or local Ollama lane). Same reasoning as jupyter-gate's mgmt attachment.
       mgmt:
     volumes:
       - open-webui-data:/app/backend/data
     environment:
-      # LLM backend: Ollama on the host lab lane (same address the old
-      # daharness compose used; verified reachable from this host).
-      - OLLAMA_BASE_URL=http://10.0.0.245:11434
       # Jupyter code-interpreter/execution lane. CODE_INTERPRETER_* inherits
       # from CODE_EXECUTION_* (verified in OWUI config.py), so the generic
       # vars carry both. ENV only seeds the FIRST boot's config (the webui.db
@@ -345,7 +342,7 @@ networks:
   # Plain NAT bridge, NOT internal — exists only because NAT (and thus
   # port publishing) is not programmed on internal networks. Two purposes:
   # the gate's published 8888 (browsers → jupyter) and open-webui's
-  # published 3000 + Ollama egress. The kernel lane never gets an adapter
+  # published 3000. The kernel lane never gets an adapter
   # here.
   mgmt:
     driver: bridge
