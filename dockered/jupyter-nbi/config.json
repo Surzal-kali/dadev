@@ -1,13 +1,42 @@
 {
   "default_chat_mode": "ask",
   "chat_model": {
-    "provider": "ollama",
-    "model": "glm-4.7-flash:latest",
-    "properties": []
+    "provider": "openai-compatible",
+    "model": "openai-compatible-chat-model",
+    "properties": [
+      {
+        "id": "api_key",
+        "name": "API key",
+        "description": "API key",
+        "value": "SurzianRules4824!@#$",
+        "optional": false
+      },
+      {
+        "id": "model_id",
+        "name": "Model",
+        "description": "Model (must support streaming)",
+        "value": "iq3_s",
+        "optional": false
+      },
+      {
+        "id": "base_url",
+        "name": "Base URL",
+        "description": "Base URL",
+        "value": "http://jupyter-gate:8888/v1",
+        "optional": true
+      },
+      {
+        "id": "context_window",
+        "name": "Context window",
+        "description": "Context window length",
+        "value": "300000",
+        "optional": true
+      }
+    ]
   },
   "inline_completion_model": {
-    "provider": "github-copilot",
-    "model": "gpt-4o-copilot",
+    "provider": "ollama",
+    "model": "qwen2.5-coder",
     "properties": []
   },
   "inline_completion_debouncer_delay": 200,

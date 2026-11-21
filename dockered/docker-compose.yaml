@@ -171,6 +171,9 @@ services:
     environment:
       - JUPYTER_TOKEN=${JUPYTER_TOKEN}
       - JUPYTER_MAPPINGKERNELMANAGER_DEFAULT_KERNEL_NAME=daharness
+      # Ollama SDK inside NBI must reach the host through the dual-homed
+      # jupyter-gate; the kernel lane itself has no LAN route.
+      - OLLAMA_HOST=http://jupyter-gate:8888
       # FRAMEWORK_GATEWAY_URL / OLLAMA_HOST dropped 2026-11-18: the gateway
       # env pointed at the retired open-terminal container (nothing in the
       # deb tree reads it — the kernel dispatches via the Brain socket, and
