@@ -57,9 +57,7 @@
 # Open WebUI:  http://<host>:3000         (chat front end; LLM configured in Open WebUI;
 #                                          code-execution lane = jupyter over the internal bridge,
 #                                          CODE_INTERPRETER_JUPYTER_* env shared with JUPYTER_TOKEN)
-#                                          speech (TTS) lane = kokoro-tts over the mgmt bridge via
-#                                          docker DNS kokoro-tts:8880 (audio.tts.* in webui.db;
-#                                          the 2026-11-20 172.18.0.1 hairpin is gone)
+#                                          local speech/TTS lane is disabled to preserve Pi memory
 #
 #   cd dockered
 #   docker compose build && docker compose up -d
@@ -131,6 +129,51 @@ services:
         target: /var/lib/daharness
         bind:
           create_host_path: false
+      # AUTHORITY BOUNDARY — the whole root stays rw by contract (shared
+      # state: cookie jar/ids.db/scratch/evidence mirror, PATH-identical with
+      # the host daemon), but the armed-state subdirs are OPERATOR-AUTHORITY
+      # territory and are overlaid READ-ONLY on the kernel lane (same
+      # stacking pattern as the jupyter-nbi bind above; later binds win on
+      # the same target subtree). Verified live 2026-11-21 before the fix:
+      # jovyan (gid 119=daharness) could create files inside scope/ AND
+      # rewrite .armed_packet_scope.json (group-writable file) — the armed
+      # manifest is the scope gate's ENTIRE enforcement basis and arming is
+      # operator-only (utils/scope_gate.py, knowledge/scope_gate.md).
+      #   scope/      armed state + manifests. Kernel-lane writes there
+      #               (program-scope manifest cache, amass .scope file, ZAP
+      #               protect-sync sidecar) are all best-effort with OSError
+      #               containment in the deb tree (_program_scope_store.py:
+      #               "_scope cache write failed (best-effort, ignored)") —
+      #               EROFS degrades to a warning, nothing fatal. The setgid
+      #               host dir keeps mtime-checks working through the bind
+      #               (reads pass; the operator arms/disarms HOST-side, whose
+      #               writes land on the same inodes the bind shares).
+      #   engagement/ armed-engagement state (.armed_engagement.json) — same
+      #               operator-only arming model (utils/engagement.py). The
+      #               kernel lane writes nothing here (arm/disarm/purge are
+      #               REPL/CLI-only; journal/evidence live in Postgres + the
+      #               separate evidence/ dir, which stays rw).
+      #   dacustoms/  THE EXCEPTION (rw) — an operator sandbox: operator-
+      #               authored customs modules the host Brain imports at
+      #               discovery (DACUSTOMS_DIR=/var/lib/daharness/dacustoms
+      #               in /etc/daharness/daharness.env). Kernel-side writes
+      #               here are intended — customs live in shared group state
+      #               so every lane sees them; treat the module code itself
+      #               as agent-authored by design (review before import).
+      - type: bind
+        source: /var/lib/daharness/scope
+        target: /var/lib/daharness/scope
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/daharness/engagement
+        target: /var/lib/daharness/engagement
+        read_only: true
+        bind:
+          create_host_path: false
+      # dacustoms/ deliberately NOT overlaid ro — sandbox exception, see the
+      # comment block above. It rides the parent /var/lib/daharness rw bind.
       - type: bind
         source: /run/daharness
         target: /run/daharness
@@ -201,6 +244,17 @@ services:
       # inside a container, costing one timeout per connect).
       - HARNESS_DB_HOST=172.28.0.1
       - HARNESS_DB_PORT=5433
+      # SCRUB (see the LANE-ROLL-PROOF note above): pg.env via env_file
+      # pours ALL lane passwords + the host-loopback pins into the kernel
+      # env; explicit environment wins the merge, so these entries blank
+      # or re-pin everything the lane must not see — only the repl_lane
+      # credential survives into the container (the kernel is agent-
+      # executed code and can read its own env; brain/gateway/operator
+      # secrets stay host-side, keeping engagement.purge() operator-only).
+      - HARNESS_DB_NAME=harness
+      - HARNESS_DB_PASSWORD_OPERATOR=
+      - HARNESS_DB_PASSWORD_BRAIN=
+      - HARNESS_DB_PASSWORD_GATEWAY=
       # The engagement lane authenticates per-DB-role; host lanes get the
       # minted lane passwords via the systemd units' EnvironmentFile
       # (/etc/daharness/pg.env, root:daharness 0640 — never the compose
@@ -214,7 +268,22 @@ services:
       # credential is passed through: the kernel is agent-executed code
       # and can read its own env, so brain/gateway/operator secrets stay
       # host-side (engagement.purge() would no longer be operator-only).
-      - HARNESS_DB_PASSWORD_REPL=${JUPYTER_LANE_HARNESS_DB_PASSWORD_REPL}
+      # LANE-ROLL-PROOF (2026-11-21): the credential is no longer copied
+      # through dockered/.env — ${JUPYTER_LANE_HARNESS_DB_PASSWORD_REPL}
+      # went blank on every lane roll (pg.env is rewritten by the lane
+      # machinery; compose interpolation only ever saw the stale/missing
+      # .env copy → "fe_sendauth: no password supplied" from every kernel
+      # dispatch, reproduced live 2026-11-21). Instead the jupyter service
+      # sources /etc/daharness/pg.env DIRECTLY via env_file below: compose
+      # re-reads the file at config time on every up, so lane rolls flow
+      # in on the next `docker compose up -d --force-recreate jupyter`.
+      # Requires the invoking user to read pg.env (surzian is in the
+      # daharness group; file is 0640 root:daharness). Precedence:
+      # environment wins over env_file, so the SCRUB entries below blank
+      # the three non-repl passwords (plus pg.env's HARNESS_DB_HOST/PORT/
+      # NAME, which describe the host loopback and would override the
+      # container pins above) — only the repl credential reaches the
+      # kernel env. Host-side lanes keep their systemd EnvironmentFile.
       # Lane role pin: the kernel entry point infers repl_lane anyway
       # (see utils.engagement._infer_lane_from_entrypoint); pinning it
       # keeps attribution explicit and immune to future entry-point
@@ -227,6 +296,16 @@ services:
       # bumps an mtime past the shipped cache. (The kernel's own import floor
       # still works — a failed pyc write is non-fatal by design.)
       - PYTHONDONTWRITEBYTECODE=1
+    env_file:
+      # Minted lane passwords + host loopback pins (see the LANE-ROLL-PROOF
+      # note above for the authority model and the SCRUB list in
+      # environment).
+      - path: /etc/daharness/pg.env
+        required: true
+    # Lane role pin + bytecode discipline live in the single environment
+    # block above; env_file only pours the minted pg.env lane vars, which
+    # the environment block then overrides (precedence: environment >
+    # env_file).
     command:
       - start-notebook.py
       - --ServerApp.ip=0.0.0.0
@@ -235,9 +314,8 @@ services:
       - --ServerApp.root_dir=/home/jovyan/work
       - --MappingKernelManager.default_kernel_name=daharness
     group_add:
-      - "125" # host daharness GID (getent group daharness) — group rwx on /run
-              # and /var/lib daharness dirs (0770/2770 setgid). The old 119 was
-              # stale (pre-.deb value; 119 is nm-openvpn).
+      - "119" # host daharness GID (getent group daharness) — group rwx on /run
+              # and /var/lib/daharness dirs (0770/2770 setgid).
     # Custom healthcheck — two reasons we don't use the base image's
     # docker_healthcheck.py here:
     #   1. The stock script's ~1s budget can't cover this image (nbi + MCP
@@ -307,11 +385,11 @@ services:
   # would plain-route into the host and destroy Ollama reachability).
   # Its 3000 publishes via mgmt only. RAG embedding offloaded to Ollama; the
   # built-in sentence-transformers model (~500MB RSS at boot, kept growing —
-  # host OOM-killer shot it once) stays disabled. A 4g Docker mem limit makes
-  # any future bloat deterministic (container restart) instead of a kernel
-  # OOM killing a random victim. pinned to :dev — v0.11.3 stable ships a
-  # broken interactive-terminal (WebSocket header) attach; :dev fixes it
-  # (open-webui#29787); revisit when stable > v0.11.3.
+  # host OOM-killer shot it once) stays disabled. The :dev-slim variant
+  # removes the bundled CUDA/ML stack; local Ollama and Kokoro remain external
+  # so those workloads stay off the OWUI process. pinned to :dev-slim —
+  # v0.11.3 stable ships a broken interactive-terminal (WebSocket header)
+  # attach; :dev fixes it (open-webui#29787).
   # ─────────────────────────────────────────────────────────────────────────
   open-webui:
     image: ghcr.io/open-webui/open-webui:dev
@@ -347,83 +425,19 @@ services:
       # live; .env is gitignored) so the copied webui.db stays coherent.
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
       - WEBUI_URL_PREFIX=${WEBUI_URL_PREFIX}
-      # Reduce memory pressure: disable the built-in sentence-transformers
-      # embedding model and offload RAG embeddings to the Ollama API.
+      # Use the host Ollama API for RAG embeddings and keep vector storage in
+      # ChromaDB (the slim image is pgvector-only).
+      - OLLAMA_BASE_URL=http://10.0.0.245:11434
       - RAG_EMBEDDING_ENGINE=ollama
+      - RAG_EMBEDDING_MODEL=nomic-embed-text
       - RAG_EMBEDDING_BATCH_SIZE=50
-      # Speech synthesis (TTS) lane → the kokoro-tts service below, over the
-      # shared mgmt bridge (docker DNS). ENV only seeds the FIRST boot's
-      # config (the webui.db row wins afterwards — carried here so a fresh
-      # webui.db doesn't fall back to the OpenAI default base URL); the live
-      # stack's row was switched to kokoro-tts:8880 by hand on 2026-11-20.
-      - AUDIO_TTS_OPENAI_API_BASE_URL=${AUDIO_TTS_OPENAI_API_BASE_URL:-http://kokoro-tts:8880/v1}
-    # Memory limit: container restart instead of host OOM-killer roulette.
-    mem_limit: 4g
-    memswap_limit: 4g
+      - VECTOR_DB=chroma
+      - USE_SLIM_DOCKER=false
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/version || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 60s
-      retries: 3
-    restart: unless-stopped
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # kokoro-tts — speech synthesis (TTS) backend for Open WebUI's read-aloud
-  # (audio.tts.engine=openai-compatible, model=kokoro, voice=af_bella in the
-  # persisted webui.db config). 2026-11-20: adopted into this stack from a
-  # standalone `docker run` container. Before adoption Open WebUI reached it
-  # only by hairpinning through the HOST port publish back into a RETIRED
-  # bridge gateway (audio.tts.openai.api_base_url=http://172.18.0.1:8880/v1 —
-  # a stale daharness-era address that kept answering only while the old
-  # mgmt bridge and its hairpin NAT survived; a docker network prune would
-  # have silenced speech permanently). Now it rides THIS stack's mgmt bridge,
-  # and Open WebUI resolves kokoro-tts:8880 directly over docker DNS — no
-  # hairpin, no dependence on any retired network.
-  #
-  # Plane: mgmt only (plain NAT bridge). TTS text is chat content, so like
-  # open-webui this service stays OUT of the internal workbench sandbox —
-  # it holds no secrets and needs nothing from the host, but unlike the
-  # kernel lane it must be reachable by name from open-webui, which the
-  # shared mgmt network provides at zero sandbox cost. The published 8880
-  # is the operator's manual door (web player / curl), carried over from
-  # the docker run line; the UI never uses it.
-  #
-  # No volumes, deliberately: this image BAKES the ~330MB Kokoro v1.0
-  # weights at /app/api/src/models/v1_0 (appuser-owned, verified inside a
-  # fresh `docker run` of the same tag), and the entrypoint's
-  # download_model.py re-verifies at each boot, so a fresh pull recreates
-  # warm with no cache to carry. The standalone container it replaces had
-  # no mounts either — parity preserved.
-  # ─────────────────────────────────────────────────────────────────────────
-  kokoro-tts:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu
-    container_name: kokoro-tts
-    ports:
-      # Same publish the standalone container used (-p 8880:8880): operator
-      # web player at /web/ + probes. Container-side listen port is 8880
-      # (NOT 8000 — verified inside the image).
-      - "8880:8880"
-    networks:
-      # Only adapter → mgmt becomes the default route. No egress is wanted
-      # (self-contained TTS on baked weights; egress traffic from here is
-      # unexpected and would only matter if the entrypoint ever needs to
-      # download into a non-baking future tag — which this publish-plane
-      # bridge permits).
-      mgmt:
-    # CPU Kokoro sits ~1.2GiB RSS while synthesizing (observed 2026-11-20);
-    # a pin turns any future weight-loading bloat into a deterministic
-    # restart instead of host OOM roulette (same policy as open-webui).
-    mem_limit: 3g
-    memswap_limit: 3g
-    healthcheck:
-      # /health is baked into the API (no auth); curl ships in the image.
-      # start_period covers an un-warmed boot (model re-download) after a
-      # fresh pull; the adopted container boots warm instantly.
-      test: ["CMD-SHELL", "curl -sf http://localhost:8880/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 180s
       retries: 3
     restart: unless-stopped
 
