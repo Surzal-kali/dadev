@@ -97,6 +97,19 @@ EOF
 # jupyterlab-lsp settings-delivery path (workspace/didChangeConfiguration) is
 # unreliable for this (pyright restarts its analysis service and only honors a
 # subset), so the config file wins.
+#
+# read-only lane posture: typeCheckingMode=off stops the type-check rule set
+# from grading notebook code (bare injected names, envelope helpers, and
+# framework-internal imports stay lint-free — report* under "off" only fires
+# for hard syntax errors and runtime-fatal unknowns), while three narrow
+# suppressions cover the rules that survive "off": unknown-import (the extraPaths
+# codebase is a *reference* lane for hover/completion, not an audit target),
+# missing-source (vendored/import-floor packages ship no .py next to the stub),
+# unused-expression (REPL display() lines look value-unused to the checker).
+# Bare unknown names still flag (reportUndefinedVariable stays at default) —
+# typos in tool names still squiggle. extraPaths gains the live framework tree
+# itself so framework-internal imports (replkit/utils/daharness/...) resolve
+# for hover + go-to-symbol, not just the generated tool stubs.
 # ─────────────────────────────────────────────────────────────────────────────
 COPY dockered/jupyter-lsp-pyright.json /opt/conda/etc/jupyter/jupyter_server_config.d/jupyter-lsp-pyright.json
 COPY dockered/10-refresh-stubs.sh /usr/local/bin/before-notebook.d/10-refresh-stubs.sh
@@ -140,12 +153,12 @@ RUN mkdir -p /opt/conda/share/framework-stubs /opt/conda/share/jupyter/pyrightco
     && chown -R ${NB_UID}:${NB_GID} /opt/conda/share/framework-stubs \
     && cat > /opt/conda/share/jupyter/pyrightconfig.d/pyrightconfig.json <<'EOF'
 {
+  "typeCheckingMode": "off",
   "stubPath": "/opt/conda/share/framework-stubs",
-  "extraPaths": ["/home/jovyan/work"],
-  "reportUndefinedVariable": "none",
+  "extraPaths": ["/home/jovyan/framework", "/home/jovyan/work"],
   "reportMissingModuleSource": "none",
   "reportMissingImports": "none",
-  "reportAttributeAccessIssue": "none"
+  "reportUnusedExpression": "none"
 }
 EOF
 

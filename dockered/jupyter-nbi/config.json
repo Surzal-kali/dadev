@@ -1,5 +1,5 @@
 {
-  "default_chat_mode": "ask",
+  "default_chat_mode": "agent",
   "chat_model": {
     "provider": "openai-compatible",
     "model": "openai-compatible-chat-model",
@@ -22,7 +22,7 @@
         "id": "base_url",
         "name": "Base URL",
         "description": "Base URL",
-        "value": "http://jupyter-gate:8888/v1",
+        "value": "http://jupyter-gate:8888/gateway/v1",
         "optional": true
       },
       {

@@ -21,7 +21,13 @@
 #   /home/jovyan/work/pyrightconfig.json  ← notebooks dir is a host bind-mount;
 #       the image-baked copy would be shadowed, so we (re)write it here.
 # Only placed when absent — an operator-pinned file in work/ wins. The baked
-# source lives in jupyter.Dockerfile's pyrightconfig.d heredoc.
+# source lives in jupyter.Dockerfile's pyrightconfig.d heredoc. The baked
+# config runs pyright in read-only-lane posture: typeCheckingMode=off (no
+# type-grading of notebook code), stubPath → the (re)generated stub dir,
+# extraPaths carries the live framework tree + work/ so framework-internal
+# imports resolve for hover/completion, and three narrow report* suppressions
+# (missing imports / missing sources / unused expressions). Unknown bare
+# names still flag, so tool-name typos keep their squiggle.
 
 LOG=/tmp/refresh-stubs.log
 {

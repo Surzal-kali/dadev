@@ -111,13 +111,16 @@ services:
       workbench:
         ipv4_address: 172.28.0.40
     volumes:
-      # The deb's framework tree. Read-only IN PRACTICE (root:root files):
-      # the container reads tool code, nothing writes into it — stub gen
-      # writes /opt/... + work/, and the ruff.toml builtins side-block is a
-      # checkout-only lane the deb tree omits by design (generator warns).
-      # dabooks notebooks lane: gone with the retired repo — /home/jovyan/work
-      # is now the image's own dir (kernel --ServerApp.root_dir unchanged).
-      - /usr/share/daharness:/home/jovyan/framework
+      # The deb's framework tree. Read-only, ENFORCED (the :ro suffix): the
+      # container reads tool code, nothing writes into it — stub gen targets
+      # /opt/conda/share/framework-stubs + work/ (and PYTHONDONTWRITEBYTECODE
+      # below stops even .pyc rewrite attempts when a deb file update shifts
+      # an mtime past its cached cpython-313.pyc; the tree ships root:root so
+      # jovyan already couldn't write it — :ro makes that a mount property
+      # instead of an ownership accident). The ruff.toml builtins side-block
+      # is a checkout-only lane the deb tree omits by design (generator warns
+      # and continues).
+      - /usr/share/daharness:/home/jovyan/framework:ro
       # Shared state, PATH-IDENTICAL so constants resolve identically in- and
       # out-of-container: cookie jar/ids.db/scratch live beside the daemon's
       # /var/lib/daharness; brain.sock rides the daemon's runtime tmpfs.
@@ -166,14 +169,18 @@ services:
       # cannot bake into it. The before-
       # notebook.d hook (10-refresh-stubs.sh) copies the baked config from
       # /opt/conda/share/jupyter/pyrightconfig.d/ on every boot (only if the
-      # operator hasn't pinned their own). Keep dockered/jupyter.Dockerfile's
-      # baked heredoc and stubPath in sync if editing by hand.
+      # operator hasn't pinned their own). Config ships read-only-lane
+      # posture: typeCheckingMode=off + stubPath → the stub dir + extraPaths
+      # carrying the live framework tree for hover/completion on
+      # framework-internal imports; unknown bare names still flag. Keep
+      # dockered/jupyter.Dockerfile's baked heredoc and stubPath in sync if
+      # editing by hand.
     environment:
       - JUPYTER_TOKEN=${JUPYTER_TOKEN}
       - JUPYTER_MAPPINGKERNELMANAGER_DEFAULT_KERNEL_NAME=daharness
       # Ollama SDK inside NBI must reach the host through the dual-homed
       # jupyter-gate; the kernel lane itself has no LAN route.
-      - OLLAMA_HOST=http://jupyter-gate:8888
+      - OLLAMA_HOST=http://jupyter-gate:8888/ollama
       # FRAMEWORK_GATEWAY_URL / OLLAMA_HOST dropped 2026-11-18: the gateway
       # env pointed at the retired open-terminal container (nothing in the
       # deb tree reads it — the kernel dispatches via the Brain socket, and
@@ -213,6 +220,13 @@ services:
       # keeps attribution explicit and immune to future entry-point
       # renames.
       - HARNESS_DB_LANE=repl_lane
+      # Stub-gen + the kernel import the deb tree; don't let CPython try to
+      # refresh the root-owned __pycache__ dirs on it — with the tree now
+      # mounted :ro the attempt surfaces as a stack-trace-noise warning
+      # ("Failed to write .pyc") on every kernel boot after a deb refresh
+      # bumps an mtime past the shipped cache. (The kernel's own import floor
+      # still works — a failed pyc write is non-fatal by design.)
+      - PYTHONDONTWRITEBYTECODE=1
     command:
       - start-notebook.py
       - --ServerApp.ip=0.0.0.0
