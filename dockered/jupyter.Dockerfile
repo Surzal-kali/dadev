@@ -101,6 +101,8 @@ EOF
 COPY dockered/jupyter-lsp-pyright.json /opt/conda/etc/jupyter/jupyter_server_config.d/jupyter-lsp-pyright.json
 COPY dockered/10-refresh-stubs.sh /usr/local/bin/before-notebook.d/10-refresh-stubs.sh
 RUN chmod +x /usr/local/bin/before-notebook.d/10-refresh-stubs.sh
+COPY dockered/10-refresh-stubs.sh /usr/local/bin/before-notebook.d/10-refresh-stubs.sh
+RUN chmod +x /usr/local/bin/before-notebook.d/10-refresh-stubs.sh
 
 # Framework copy for build-time stub generation (bind mounts don't exist in the
 # build container). Sources come from the deb's installed tree via compose's

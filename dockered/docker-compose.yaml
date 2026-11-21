@@ -38,6 +38,13 @@
 # create_host_path=false so up fails loudly instead of docker silently
 # mkdir-ing an empty dir that the daemon's tmpfs would then overmount.
 #
+# HOME PERSISTENCE: /home/jovyan is a whole-home bind to /dadev/jupyterhome
+# (uid 1000/gid 100 = jovyan = surzal's id) — dotfiles, IPython history,
+# .claude logins and the notebooks dir all survive container removes and
+# recreates. If /dadev/jupyterhome is ever lost, recreate + reseed before
+# `compose up` (see the volume comment block on the jupyter service).
+# The old /home/kali/jupyter-home/.ipython sliver lane is retired.
+#
 # The shipped daharness unit now sets RuntimeDirectoryPreserve=restart
 # (2026-10-22): `systemctl restart` — and Restart=on-failure restarts —
 # keep the tmpfs mounted, so the /run binds below survive daemon restarts.
@@ -50,6 +57,9 @@
 # Open WebUI:  http://<host>:3000         (chat front end; LLM configured in Open WebUI;
 #                                          code-execution lane = jupyter over the internal bridge,
 #                                          CODE_INTERPRETER_JUPYTER_* env shared with JUPYTER_TOKEN)
+#                                          speech (TTS) lane = kokoro-tts over the mgmt bridge via
+#                                          docker DNS kokoro-tts:8880 (audio.tts.* in webui.db;
+#                                          the 2026-11-20 172.18.0.1 hairpin is gone)
 #
 #   cd dockered
 #   docker compose build && docker compose up -d
@@ -123,11 +133,25 @@ services:
         target: /run/daharness
         bind:
           create_host_path: false
-      - /home/kali/jupyter-home/.ipython:/home/jovyan/.ipython   # IPython history survives recreates
+      # Whole-home persistence — /home/jovyan survives container removes and
+      # image recreates (dotfiles, .claude logins, .local pip installs, IPython
+      # history, notebooks under work/). Host dir seeded 2026-11-20 from the
+      # live container's home; OWNERSHIP CONTRACT: host tree must be
+      # uid 1000 (= jovyan) + gid 100 (= users, surzal's supplementary group).
+      # The image's `fix-permissions /home/jovyan` layer is shadowed by this
+      # bind — if the seed dir is ever lost, recreate it before `compose up`:
+      #   sudo mkdir -p /dadev/jupyterhome && sudo chown 1000:100 /dadev/jupyterhome
+      # (a root-owned dir here silently breaks the whole lane — first boot
+      # mkdirs fail; the same bug killed the old .ipython bind, see git log).
+      # Image-baked home content is effectively dead weight under this bind;
+      # runtime-booted state (10-refresh-stubs etc.) still lands correctly.
+      - /dadev/jupyterhome:/home/jovyan
 
-      # Persist notebook-intelligence settings + the stored GitHub token so
+      # Persistent notebook-intelligence settings + the stored GitHub token so
       # image rebuilds don't wipe the Copilot login. Contains credentials —
-      # gitignored as dockered/jupyter-nbi/.
+      # gitignored as dockered/jupyter-nbi/. Stacked OVER the whole-home bind
+      # above (later bind wins on the same target subtree); the home bind's
+      # seeded .jupyter/nbi stays empty and unused.
       - ./jupyter-nbi:/home/jovyan/.jupyter/nbi
 
       # Env-level NBI config baked by the Dockerfile, bind-mounted read-only:
@@ -138,7 +162,8 @@ services:
       - ./jupyter-nbi-config.json:/opt/conda/share/jupyter/nbi/config.json:ro
 
       # pyrightconfig for the jupyterlab-lsp pyright lane: NOT mounted — work/
-      # is a host bind-mount and the image cannot bake into it. The before-
+      # lives on the whole-home host bind (/dadev/jupyterhome) and the image
+      # cannot bake into it. The before-
       # notebook.d hook (10-refresh-stubs.sh) copies the baked config from
       # /opt/conda/share/jupyter/pyrightconfig.d/ on every boot (only if the
       # operator hasn't pinned their own). Keep dockered/jupyter.Dockerfile's
@@ -309,6 +334,12 @@ services:
       # embedding model and offload RAG embeddings to the Ollama API.
       - RAG_EMBEDDING_ENGINE=ollama
       - RAG_EMBEDDING_BATCH_SIZE=50
+      # Speech synthesis (TTS) lane → the kokoro-tts service below, over the
+      # shared mgmt bridge (docker DNS). ENV only seeds the FIRST boot's
+      # config (the webui.db row wins afterwards — carried here so a fresh
+      # webui.db doesn't fall back to the OpenAI default base URL); the live
+      # stack's row was switched to kokoro-tts:8880 by hand on 2026-11-20.
+      - AUDIO_TTS_OPENAI_API_BASE_URL=${AUDIO_TTS_OPENAI_API_BASE_URL:-http://kokoro-tts:8880/v1}
     # Memory limit: container restart instead of host OOM-killer roulette.
     mem_limit: 4g
     memswap_limit: 4g
@@ -317,6 +348,65 @@ services:
       interval: 30s
       timeout: 10s
       start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # kokoro-tts — speech synthesis (TTS) backend for Open WebUI's read-aloud
+  # (audio.tts.engine=openai-compatible, model=kokoro, voice=af_bella in the
+  # persisted webui.db config). 2026-11-20: adopted into this stack from a
+  # standalone `docker run` container. Before adoption Open WebUI reached it
+  # only by hairpinning through the HOST port publish back into a RETIRED
+  # bridge gateway (audio.tts.openai.api_base_url=http://172.18.0.1:8880/v1 —
+  # a stale daharness-era address that kept answering only while the old
+  # mgmt bridge and its hairpin NAT survived; a docker network prune would
+  # have silenced speech permanently). Now it rides THIS stack's mgmt bridge,
+  # and Open WebUI resolves kokoro-tts:8880 directly over docker DNS — no
+  # hairpin, no dependence on any retired network.
+  #
+  # Plane: mgmt only (plain NAT bridge). TTS text is chat content, so like
+  # open-webui this service stays OUT of the internal workbench sandbox —
+  # it holds no secrets and needs nothing from the host, but unlike the
+  # kernel lane it must be reachable by name from open-webui, which the
+  # shared mgmt network provides at zero sandbox cost. The published 8880
+  # is the operator's manual door (web player / curl), carried over from
+  # the docker run line; the UI never uses it.
+  #
+  # No volumes, deliberately: this image BAKES the ~330MB Kokoro v1.0
+  # weights at /app/api/src/models/v1_0 (appuser-owned, verified inside a
+  # fresh `docker run` of the same tag), and the entrypoint's
+  # download_model.py re-verifies at each boot, so a fresh pull recreates
+  # warm with no cache to carry. The standalone container it replaces had
+  # no mounts either — parity preserved.
+  # ─────────────────────────────────────────────────────────────────────────
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu
+    container_name: kokoro-tts
+    ports:
+      # Same publish the standalone container used (-p 8880:8880): operator
+      # web player at /web/ + probes. Container-side listen port is 8880
+      # (NOT 8000 — verified inside the image).
+      - "8880:8880"
+    networks:
+      # Only adapter → mgmt becomes the default route. No egress is wanted
+      # (self-contained TTS on baked weights; egress traffic from here is
+      # unexpected and would only matter if the entrypoint ever needs to
+      # download into a non-baking future tag — which this publish-plane
+      # bridge permits).
+      mgmt:
+    # CPU Kokoro sits ~1.2GiB RSS while synthesizing (observed 2026-11-20);
+    # a pin turns any future weight-loading bloat into a deterministic
+    # restart instead of host OOM roulette (same policy as open-webui).
+    mem_limit: 3g
+    memswap_limit: 3g
+    healthcheck:
+      # /health is baked into the API (no auth); curl ships in the image.
+      # start_period covers an un-warmed boot (model re-download) after a
+      # fresh pull; the adopted container boots warm instantly.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8880/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
       retries: 3
     restart: unless-stopped
 

@@ -21,6 +21,36 @@ helpers, run the chain, and bank results to stores all within the same
 block. If a later call needs a value from an earlier call, retrieve it from
 stores (findings, memory, scratch) — never assume a variable survived.
 
+## lane boundaries — network and filesystem (verified 2026-11-20)
+
+The kernel container sits on the INTERNAL workbench bridge (no egress
+adapter): `127.0.0.1` inside execute_code is the CONTAINER's loopback, not
+the host's. Host services (Ollama on :11434, the :5433 postgres cluster)
+are NOT reachable from raw kernel sockets regardless of how they're bound
+on the host — probing `http://127.0.0.1:11434/api/embed` from
+`execute_code` returns `[Errno 111] Connection refused` even when the
+embedding lane is healthy (a `urllib` probe looks identical to a real
+outage). Only the framework tool path can reach them: kernel tool calls
+ride the Brain UDS socket (`/run/daharness/brain.sock`, a filesystem path,
+unaffected by network namespace) and execute HOST-side through the scope
+gate.
+
+Practical rules:
+- Never debug `EMBED_URL`/embedding health from the kernel. Use
+  `framework_health` or a `tools_search` probe instead — they run
+  host-side and report the truth.
+- Any direct socket/HTTP experiment in execute_code can only reach things
+  ON the workbench bridge (jupyter:8888, 172.28.0.x peers), not host
+  services. Raw `socket`/`urllib` refusal ≠ service down.
+
+Filesystem: the kernel runs as `jovyan`; host-side state dirs written by
+the daemon (`scratch.db`, `run/jobs`, `run/worker_queue`, `.cache`) are
+root/daharness-owned → kernel reads fail with `Permission denied`. Scratch
+and job forensics MUST go through the framework tools
+(`scratch_search`, and the various `*_status` tools), not filesystem
+access. Only PATH-identical mounts (`/var/lib/daharness` via group_add
+GID 125, `/run/daharness`, `/home/jovyan/framework`) are readable.
+
 ## within a single call
 
 Multiple `await` lines in one execute_code block run sequentially and
