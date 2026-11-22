@@ -545,12 +545,23 @@ services:
       - HARNESS_DB_HOST=172.28.0.1
       - HARNESS_DB_PORT=5433
       - HARNESS_DB_LANE=repl_lane
+      # SCRUB (identical to the jupyter service's list): pg.env via env_file
+      # pours ALL four lane passwords into the env; explicit environment wins
+      # the merge, so these blanks leave ONLY the repl_lane credential —
+      # the one role this lane authenticates with. Without them the editor
+      # lane would hold the operator/brain/gateway secrets (privilege
+      # escalation — engagement.purge() is operator-only).
+      - HARNESS_DB_NAME=harness
+      - HARNESS_DB_PASSWORD_OPERATOR=
+      - HARNESS_DB_PASSWORD_BRAIN=
+      - HARNESS_DB_PASSWORD_GATEWAY=
       - PYTHONDONTWRITEBYTECODE=1
     env_file:
       # Same source/scrub contract as the kernel lane (see the jupyter
       # service's LANE-ROLL-PROOF note): environment wins over env_file, so
-      # the two blank entries scrub the three non-repl lane passwords + the
-      # pg.env loopback pins to only the repl credential reaching this env.
+      # the SCRUB environment entries above blank the three non-repl lane
+      # passwords + the pg.env loopback pins — only the repl credential and
+      # the container pins below reach this lane's env.
       - path: /etc/daharness/pg.env
         required: true
     networks:
@@ -643,6 +654,21 @@ services:
       - -c
       - 'sed -i "s/^user:x:1000:[0-9]*:/user:x:1000:119:/" /etc/passwd &&
          exec /usr/bin/tini -- /app/entrypoint-slim.sh run'
+    # ─── notebooks lane: deliberately DISABLED on the slim image ────────────
+    # open-terminal's notebook UI/cell-execution feature (nbclient + ipykernel
+    # + nbformat) is absent from ghcr.io/open-webui/open-terminal:slim by
+    # design, so the feature self-disables at boot (env.py: ENABLE_NOTEBOOKS
+    # = find_spec(...) check) and .ipynb files open as raw JSON text in the
+    # code editor. That is the chosen shape (operator decision B, 2026-11-21):
+    # notebook RENDERING + EXECUTION stays on the jupyter service, whose
+    # daharness kernel already runs cells with the framework tool stubs;
+    # this lane treats .ipynb as text. Runtime pip cannot close the gap
+    # anyway — slim has no pip and the workbench bridge has no egress, so
+    # the extras could only come from a baked image (option A declined).
+    # 'Git unavailable' in the panel is likewise cosmetic: git IS baked in
+    # and works in the terminal shell; the panel's detector gives up on the
+    # shared-state path but the .git checkout itself is fully usable.
+    # ─────────────────────────────────────────────────────────────────────────
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/docs || exit 1"]
       interval: 30s
