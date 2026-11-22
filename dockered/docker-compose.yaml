@@ -1,9 +1,16 @@
 # =============================================================================
-# Framework workbench: Open WebUI + JupyterLab (daharness kernel lane)
+# Framework workbench: Open WebUI + JupyterLab (daharness kernel lane) + open-terminal
 #
 # 2026-11-18 transplant: open-webui moved back in from the retired
 # /home/surzal/daharness/dockered stack. code-server stays retired — the
-# trimmed shape is jupyter + jupyter-gate + open-webui only.
+# trimmed shape is jupyter + jupyter-gate + open-webui + open-terminal.
+#
+# 2026-11-21: open-terminal rejoined as an agent file-editor lane (a local
+# model connects to it from Open WebUI's Integrations and edits dacustoms
+# modules + notebooks as files/PRs instead of authoring through standalone
+# Jupyter cells). It mirrors the jupyter service's bind mounts and network
+# stance but holds NO Brain — it is a client of the host sidecar like the
+# kernel lane (see the open-terminal service block for the lane contract).
 #
 # The workbench network stays INTERNAL: the kernel container has no routed
 # egress at all — the notebook lane is a compute sandbox whose only
@@ -438,6 +445,209 @@ services:
       interval: 30s
       timeout: 10s
       start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # open-terminal — agent file-editor lane (the retired service, relit
+  # 2026-11-21 in a slimmer shape).
+  #
+  # A local model connects to this from Open WebUI (Settings → Admin →
+  # Integrations → Open Terminal, http://open-terminal:8000) and edits files
+  # in a real editor surface over REST/WebSocket — dacustoms modules, the
+  # notebooks tree, knowledge markdowns — as a git client, instead of
+  # authoring code through standalone execute_code cells with no variable
+  # persistence and no multi-line edits.
+  #
+  # HOLDS NO BRAIN — a deliberate difference from the retired service. This
+  # container is a CLIENT of the host sidecar, in exactly the kernel lane's
+  # position: tool code executes HOST-side through /run/daharness/brain.sock
+  # (a filesystem path, untouched by network namespaces) under the executor's
+  # scope gate / journal / identity. Nothing here starts a second sidecar —
+  # two Brains would split process-local session state and double-dispatch
+  # (AGENTS.md pitfalls). The slim image deliberately omits a terminal-side
+  # gateway: FRAMEWORK_GATEWAY_URL is NOT set, and nothing in the deb tree
+  # reads that env (jupyter's env comment keeps the historical note; the
+  # owui valve default still says :6000 and is re-pointed by hand in the OWUI
+  # valves UI to http://open-terminal:8000 when this lane is used).
+  #
+  # Image: :slim (~430MB) — minimal Debian + git/curl/jq, NO sudo, NO docker
+  # socket, NO Chromium/desktop, NO runtime package installers, and its
+  # entrypoint never runs the egress firewall because OPEN_TERMINAL_ALLOWED_
+  # DOMAINS is left unset on purpose (iptables is pointless on an internal
+  # bridge with no route off it — the workbench sandbox boundary does the
+  # isolation). If this lane ever needs pip (it has the deb tree's vendored
+  # closure via PYTHONPATH), build a custom image off Dockerfile.slim.
+  #
+  # Mirrors the jupyter service's mounts + stance (see that service block for
+  # the shared rationale: PATH-identical state root, create_host_path=false
+  # daemon-first start order, GID 119, PG pin through the bridge gateway,
+  # env_file/scrub authority boundary):
+  #   /usr/share/daharness      deb framework tree — READ-ONLY here too. The
+  #                             editor reads tool code for context; the only
+  #                             sanctioned authoring roots are dacustoms/ and
+  #                             the notebooks tree (both writable below).
+  #   /var/lib/daharness        rw whole-root (shared state contract).
+  #   ... + scope/, engagement/ RO overlays (armed state = operator authority;
+  #                             identical reasoning to the kernel lane).
+  #   // dacustoms/ deliberately NOT overlaid ro — it is THE sandbox
+  #                             exception, an operator/agent-authored module
+  #                             dir by design; that is what this lane exists
+  #                             to edit. git worktree: commits land host-side
+  #                             via the same .git the other lanes see.
+  #   /run/daharness            Brain socket tmpfs, rw client access only —
+  #                             the kernel lane still dispatches everything
+  #                             traffic-shaped; this lane edits code.
+  #   /home/ot (bind)           survives container removes. Own name, NOT
+  #                             jupyterhome/bind-user: this lane is a shared
+  #                             scratch/edit surface, not the operator home.
+  #   /home/jovyan/work         the jupyter WHOLE-HOME bind's notebooks
+  #                             subtree, PATH-IDENTICAL (/home/jovyan/work on
+  #                             both lanes) so "open a notebook in the
+  #                             terminal lane" and "open it in JupyterLab"
+  #                             are the same inode. Read-write: notebook
+  #                             authoring from a real editor is the point of
+  #                             this lane.
+  #
+  # Networks: workbench (internal, pinned IP) FIRST and LAST — this lane
+  # mirrors the jupyter SERVICE, not the open-webui straddle. No mgmt, no
+  # egress, no published port: the model reaches it through OWUI's backend
+  # (docker DNS on the workbench bridge; Open Terminal connections are
+  # proxied server-side like tool server connections — the browser never
+  # talks to the terminal directly), which the internal bridge carries.
+  #
+  # Auth: OPEN_TERMINAL_API_KEY is REQUIRED and must be pasted into the OWUI
+  # integration row (upstream deployment guidance). The gateway's GATEWAY_API
+  # _KEY and the Brain are host-side concerns this lane never needs; the
+  # repl_lane PG credential rides /etc/daharness/pg.env only because the
+  # deb-tree journal path writes a row per dispatch and would otherwise
+  # park rows in the spool on every engagement-armed call.
+  # ─────────────────────────────────────────────────────────────────────────
+  open-terminal:
+    image: ghcr.io/open-webui/open-terminal:slim
+    depends_on:
+      - jupyter
+    working_dir: /var/lib/daharness/dacustoms
+    environment:
+      # The key grants full command exec inside the container. Compose fails
+      # up when unset — same posture as the retired CODE_SERVER_PASSWORD.
+      - OPEN_TERMINAL_API_KEY=${OPEN_TERMINAL_API_KEY:?set OPEN_TERMINAL_API_KEY in dockered/.env}
+      # Frame the file browser on the editor dir of record without limiting
+      # the API: a UI root hint, never a security feature (upstream docs).
+      - OPEN_TERMINAL_FILE_BROWSER_ROOT=/var/lib/daharness/dacustoms
+      # New sessions open at the customs worktree (absolute form, since the
+      # API ignores start dirs outside home — this is the documented hint).
+      - OPEN_TERMINAL_START_DIR=/home/ot
+      - BRAIN_SOCKET=/run/daharness/brain.sock
+      - WORKSPACE_ROOT=/var/lib/daharness
+      - DACUSTOMS_DIR=/var/lib/daharness/dacustoms
+      - OBS_WS_URL=ws://10.0.0.245:4455
+      - HARNESS_DB_HOST=172.28.0.1
+      - HARNESS_DB_PORT=5433
+      - HARNESS_DB_LANE=repl_lane
+      - PYTHONDONTWRITEBYTECODE=1
+    env_file:
+      # Same source/scrub contract as the kernel lane (see the jupyter
+      # service's LANE-ROLL-PROOF note): environment wins over env_file, so
+      # the two blank entries scrub the three non-repl lane passwords + the
+      # pg.env loopback pins to only the repl credential reaching this env.
+      - path: /etc/daharness/pg.env
+        required: true
+    networks:
+      # Pinned IP for stable host-side diagnostics (same discipline as
+      # jupyter's .40 and the other .2x/.3x pins). Single adapter: internal
+      # is the default route and that is the point.
+      workbench:
+        ipv4_address: 172.28.0.45
+    volumes:
+      # Deb framework tree — mirror of the jupyter mount (ro suffix enforced;
+      # the only difference is the target dir NAME: open-terminal=/opt/
+      # framework vs jupyter=/home/jovyan/framework — see constants.py's
+      # container-lane comment). Reads stay readable while editing next to
+      # the live tree; nothing in this lane may write into it. The deb-tree
+      # sitecustomize/dacustoms-finder machinery keeps the dacustoms.*
+      # import prefix resolvable on this lane via DACUSTOMS_DIR above.
+      - /usr/share/daharness:/opt/framework:ro
+      # Shared state root — same PATH-identical rw contract as jupyter.
+      # dacustoms/ is THE reason this service exists; see the lane block
+      # above. The checkout lives at /var/lib/daharness/dacustoms (operator
+      # state, group-shared), so commits land host-side through the same .git
+      # the Brain imports from — one origin of truth, no mirrored tree.
+      - type: bind
+        source: /var/lib/daharness
+        target: /var/lib/daharness
+        bind:
+          create_host_path: false
+      # Armed-state RO overlays — identical authority boundary as the kernel
+      # lane. See the jupyter service comment block (VERIFIED 2026-11-21) for
+      # why these are NOT rw on container lanes.
+      - type: bind
+        source: /var/lib/daharness/scope
+        target: /var/lib/daharness/scope
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /var/lib/daharness/engagement
+        target: /var/lib/daharness/engagement
+        read_only: true
+        bind:
+          create_host_path: false
+      # Brain socket tmpfs — the ONLY lane to the host executor. No sidecar
+      # here; every tool call rides the host Brain, gated and journaled.
+      # Group access: /run/daharness is 0770 root:daharness; this container
+      # reaches it as IMAGE USER uid 1000 == the HOST uid 1000 (surzian, a
+      # daharness member). Group membership is resolved by UID MAPPING, not
+      # by a supplementary-list — a uid-1000 process needs NO gid 119 in its
+      # groups list to get group access: the kernel checks the FILE's group
+      # against the process's EFFECTIVE GID or SUPPLEMENTARY groups... a
+      # mismatch still fails for plain 0770. The gosu quirk is why this
+      # service instead mounts /run + /var/lib WITH group access arranged
+      # host-side: /run/daharness is RuntimeDirectory 0770 root:daharness +
+      # UMASK=0007 leaves files group-rw, and this lane is therefore granted
+      # the group through group_add on the ROOT-stage process (see the
+      # comment block at the service top for the gosu-reset detail and why
+      # the socket connect below was verified live).
+      - type: bind
+        source: /run/daharness
+        target: /run/daharness
+        bind:
+          create_host_path: false
+      # Editor home (settings, shells history, agent-CLI configs if any land
+      # here later). Host dir seed (once, before first up):
+      #   sudo mkdir -p /dadev/ot-home && sudo chown 1000:119 /dadev/ot-home
+      # (the compose entry cannot mkdir with the right owner itself — a
+      # root-owned home breaks the same way jupyter's whole-home seed did).
+      - /dadev/ot-home:/home/ot
+      # Notebooks tree — PATH-IDENTICAL with the kernel lane
+      # (/home/jovyan/work on both containers), the same host inode, so an
+      # ipynb edited in this lane opens untouched in JupyterLab.
+      - /dadev/jupyterhome/work:/home/jovyan/work
+    # Slim image runs as ROOT and gosu-drops to the image's `user` (uid 1000)
+    # — a compose `user:` override breaks that drop ("failed switching to
+    # user", EPERM: an already-non-root PID1 cannot switch), so the stock
+    # root→gosu flow stays. But gosu RESETS the supplementary groups list
+    # (verified live: gosu user id → groups=1000 only, group_add's 119 gone),
+    # so group_add GIDs never reach the gosu'd app. The fix is PRIMARY-GID
+    # surgery in the root stage BEFORE the drop: re-point the image `user`'s
+    # /etc/passwd GID at the host daharness GID 119 (getent group daharness;
+    # re-sync if the group ever migrates). Verified live: the gosu'd app
+    # process reads Uid 1000 / Gid 119 → group write lands on the 2770
+    # setgid /var/lib/daharness dirs (dacustoms probe OK) and brain.sock
+    # (0770 root:daharness) connects. The entrypoint override below is the
+    # same stock script — the only delta is the passwd line + the identical
+    # tini/exec handoff, so every stock behavior (secrets _FILE resolution,
+    # fix_home seeding, the unset-DOMAINS no-firewall path) is preserved.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'sed -i "s/^user:x:1000:[0-9]*:/user:x:1000:119:/" /etc/passwd &&
+         exec /usr/bin/tini -- /app/entrypoint-slim.sh run'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/docs || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
       retries: 3
     restart: unless-stopped
 
