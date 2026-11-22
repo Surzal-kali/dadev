@@ -11,11 +11,21 @@ FROM quay.io/jupyter/base-notebook:latest
 USER root
 # nodejs/npm: jupyterlab-lsp's pyright language server runs under node.
 # git: needed by stub-gen (gen_repl_stubs.py imports the framework tree which
-# uses git for version discovery) and by the notebook lane at runtime. Merged
-# into a single apt-get update to avoid a second network round-trip — the
+# uses git for version discovery) and by the notebook lane at runtime.
+# Agent-QoL utilities (2026-11-22, knowledge/utilities.md): file (magic-type
+# IDs), xxd (hex dump), unzip (APK/JAR triage off the apk/ mirror), tree (dir
+# overviews), jq (JSON shaping), vim-tiny (in-container edits), procps/psmisc
+# (process inspection), netcat-openbsd + iputils-ping + dnsutils (workbench-
+# bridge diagnostics ONLY — the internal network keeps the no-egress posture;
+# these reach 172.28.0.x peers, while host-side services stay framework-tools-
+# through-brain.sock, never these shells). pip wheels can't be fetched at
+# runtime (no egress), so anything a notebook one-shot shell wants goes in
+# HERE at build time while the build's host network is up.
+# Merged into a single apt-get update to avoid a second network round-trip — the
 # previous duplicate RUN here was the step that surfaced the BuildKit DNS
 # flakiness (2026-10-21), since it was the only non-cached apt step left.
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git \
+    file xxd tree jq vim-tiny unzip procps psmisc netcat-openbsd iputils-ping dnsutils \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /tmp/framework-requirements.txt
 

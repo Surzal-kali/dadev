@@ -524,7 +524,19 @@ services:
   # park rows in the spool on every engagement-armed call.
   # ─────────────────────────────────────────────────────────────────────────
   open-terminal:
-    image: ghcr.io/open-webui/open-terminal:slim
+    build:
+      # Thin extension of the upstream slim image (dockered/open-terminal.
+      # Dockerfile): one build-time apt layer of agent-QoL utilities on top
+      # of ghcr.io/open-webui/open-terminal:slim — see knowledge/utilities.md
+      # for the usage map and the why-runtime-apt-is-dead note. The upstream
+      # entrypoint/egress machinery is inherited untouched; compose's inline
+      # entrypoint override (below) still handles the GID surgery + tini.
+      context: .
+      dockerfile: open-terminal.Dockerfile
+      # Same build-on-host-network workaround as the jupyter build above:
+      # the runtime lane has no egress by doctrine; the BUILD needs the host
+      # resolver for deb.debian.org.
+      network: host
     depends_on:
       - jupyter
     working_dir: /var/lib/daharness/dacustoms
@@ -629,6 +641,10 @@ services:
       #   sudo mkdir -p /dadev/ot-home && sudo chown 1000:119 /dadev/ot-home
       # (the compose entry cannot mkdir with the right owner itself — a
       # root-owned home breaks the same way jupyter's whole-home seed did).
+      # NOTE the GID: the built image's `user` is uid 1000 gid 100; the
+      # entrypoint override below re-points /etc/passwd at the HOST daharness
+      # GID 119 before the gosu drop, so both the OT home bind and the state
+      # root resolve group access against 119.
       - /dadev/ot-home:/home/ot
       # Notebooks tree — PATH-IDENTICAL with the kernel lane
       # (/home/jovyan/work on both containers), the same host inode, so an
@@ -649,6 +665,12 @@ services:
     # same stock script — the only delta is the passwd line + the identical
     # tini/exec handoff, so every stock behavior (secrets _FILE resolution,
     # fix_home seeding, the unset-DOMAINS no-firewall path) is preserved.
+    # NOTE on the built image (open-terminal.Dockerfile, 2026-11-22): the
+    # extension layer ONLY adds an apt layer — it does NOT set USER, because
+    # the stock image boots ROOT (Config.User="") and this override performs
+    # the passwd surgery + gosu drop. A trailing `USER user` here crashes the
+    # entrypoint (sed can't rewrite /etc/passwd as uid 1000: "Permission
+    # denied" restart loop).
     entrypoint:
       - /bin/sh
       - -c

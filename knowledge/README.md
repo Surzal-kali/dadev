@@ -22,9 +22,23 @@ that knowledge; OWUI's own RAG is the delivery mechanism.
   against. `## ids.db schema` matches "database schema" better than `## DB`.
 - Cross-reference source docs by name (`AGENTS.md`, the per-lane `README.md`
   files, the `packaging/man/` man pages) so the model can follow up with the
-  full doc if needed.
+  full doc if the knowledge chunk truncates.
 - No engagement data, no target specifics — assistant-ops knowledge only
   (same scope rule as the `repl-bank` knowledge collection).
+
+## Index
+
+| file | topic |
+| --- | --- |
+| `engagement_lane.md` | engagement/purge/journal posture for lanes |
+| `execute_code.md` | the jupyter execute_code lane (one-shot semantics, tool aliases, lane boundaries) |
+| `findings.md` | findings + unknown ledger usage |
+| `first_run.md` | bootstrap/order-of-operations for a fresh box |
+| `lab-dns.md` | workbench DNS/resolver history |
+| `lanes.md` | which process/lane executes what, and how to tell from a result |
+| `scope_gate.md` | armed scope semantics for every traffic lane |
+| `tool_schema.md` | manifest parameter schema conventions for the big tools |
+| `utilities.md` | shell/file utilities baked into the jupyter + open-terminal lanes (what to reach for before a framework tool) |
 
 ## Syncing
 
