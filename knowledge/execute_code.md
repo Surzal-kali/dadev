@@ -9,7 +9,7 @@ async wrappers, envelope helpers) and the scope gate are wired in
 identically. This is a DIRECT EXECUTION lane: the model can run multi-step
 tool chains programmatically without handing off to the User for REPL entry.
 
-Kernel connectivity: The Jupyter kernel is a separate process connected via WebSocket. If execute_code returns Error: timed out during opening handshake, the kernel is unresponsive (crashed, overwhelmed, or disconnected). This is a kernel-level issue, not a tool failure — report it to the User and wait; do not retry repeatedly. The User can restart the kernel from the OpenWebUI interface. Bridge tools (framework_run_tool) remain functional during kernel downtime — use them as a fallback for critical operations
+Kernel connectivity: The Jupyter kernel is a separate process connected via WebSocket. If execute_code returns Error: timed out during opening handshake, the kernel is unresponsive (crashed, overwhelmed, or disconnected). This is a kernel-level issue, not a tool failure — report it to the User and wait; do not retry repeatedly. The User can restart the kernel from the OpenWebUI interface. Bridge tools (`daharness_tools_execute`, `daharness_tools_search`) remain functional during kernel downtime — use them as a fallback for critical operations
 
 ## execution scope — one call = one fresh context
 
@@ -25,31 +25,34 @@ stores (findings, memory, scratch) — never assume a variable survived.
 
 The kernel container sits on the INTERNAL workbench bridge (no egress
 adapter): `127.0.0.1` inside execute_code is the CONTAINER's loopback, not
-the host's. Host services (Ollama on :11434, the :5433 postgres cluster)
-are NOT reachable from raw kernel sockets regardless of how they're bound
-on the host — probing `http://127.0.0.1:11434/api/embed` from
-`execute_code` returns `[Errno 111] Connection refused` even when the
-embedding lane is healthy (a `urllib` probe looks identical to a real
-outage). Only the framework tool path can reach them: kernel tool calls
+the host's. Host services are unreachable VIA LOOPBACK — `127.0.0.1:11434`
+and `127.0.0.1:5433` return `[Errno 111] Connection refused` no matter how
+they're bound on the host. BUT they are reachable over the bridge gateway:
+`172.28.0.1:5433` (daharness-pg) ACCEPTS TCP from the kernel (verified
+2026-11-22), and so do bridge peers (`172.28.0.30:8080`, open-webui). This
+is precisely why the standing rule is `db_exec` over brain.sock, never a
+raw socket to 5433 — a raw connection from the kernel lane bypasses the
+journal/evidence/credential lanes and runs as the wrong identity. Only the
+framework tool path runs host-side with full provenance: kernel tool calls
 ride the Brain UDS socket (`/run/daharness/brain.sock`, a filesystem path,
-unaffected by network namespace) and execute HOST-side through the scope
-gate.
+unaffected by network namespace) and execute through the scope gate.
 
 Practical rules:
 - Never debug `EMBED_URL`/embedding health from the kernel. Use
-  `framework_health` or a `tools_search` probe instead — they run
-  host-side and report the truth.
-- Any direct socket/HTTP experiment in execute_code can only reach things
-  ON the workbench bridge (jupyter:8888, 172.28.0.x peers), not host
-  services. Raw `socket`/`urllib` refusal ≠ service down.
+  `framework_health()` (kernel-side bare callable, runs host-side via the
+  Brain) or the REST `/health` endpoint instead — they report the truth.
+- Any direct socket/HTTP experiment in execute_code can reach the workbench
+  bridge AND the bridge gateway's host-published services (`172.28.0.1`) —
+  but NOT host loopback (`127.0.0.x`). Raw `socket`/`urllib` refusal on
+  127.0.0.1 ≠ service down; it means you hit container loopback.
 
 Filesystem: the kernel runs as `jovyan`; host-side state dirs written by
 the daemon (`scratch.db`, `run/jobs`, `run/worker_queue`, `.cache`) are
 root/daharness-owned → kernel reads fail with `Permission denied`. Scratch
 and job forensics MUST go through the framework tools
 (`scratch_search`, and the various `*_status` tools), not filesystem
-access. Only PATH-identical mounts (`/var/lib/daharness` via group_add
-GID 125, `/run/daharness`, `/home/jovyan/framework`) are readable.
+access. Only PATH-identical mounts (`/var/lib/daharness` via the extra
+`group_add` gid — check `id` in-session, it moves per rebuild; `/run/daharness`, `/home/jovyan/framework`) are readable.
 
 ## within a single call
 
@@ -78,7 +81,10 @@ resolves, not dotted tool_ids): `nmap`, `masscan`, `ffuf_payload`,
 `msfvenom`, `msf_dispatch`, `msf_index`, `msf_options`, `msf_interact`,
 `session_get`, `session_post`, `session_upload`. The full alias set is in
 `tool_repl.py:_TOOL_ALIASES` + auto-derived from module_id. When unsure
-of a base name, use `framework_search_tools` to confirm.
+of a base name, use `discover_tools("<intent>", top_k=N)` — the in-kernel
+counterpart of the bridge's `daharness_tools_search` (the bare name
+`discover_tools` with a semantic intent string, not `framework_search_tools`).
+`tools` (manifest dict), `ToolManifest` and `ToolRegistry` are also visible.
 
 ## await is required
 
@@ -105,7 +111,7 @@ gate. No manual [GATED] markers needed: the gate is automatic.
 ## budget
 
 The per-turn tool budget (`TOOL_BUDGET_PER_TURN`) is enforced on the bridge
-wrapper (`framework_run_tool` / OWUI tool calls), NOT on execute_code. The
+wrapper (`daharness_tools_execute` / OWUI tool calls), NOT on execute_code. The
 kernel talks to the framework directly, so chains run unbounded. This is
 deliberate: scripting loops and multi-step chains through execute_code is
 the expected workflow, and a per-call cap would make that impossible.

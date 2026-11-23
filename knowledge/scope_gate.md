@@ -51,7 +51,7 @@ layout.
 
 ## where it enforces
 
-- **Bridge lane** (OWUI `framework_run_tool` / gateway `/tools/execute`):
+- **Bridge lane** (OWUI `daharness_tools_execute` / gateway `/tools/execute`):
   every tool dispatch goes through the gate.
 - **execute_code lane** (Jupyter kernel): the gate fires on every
   traffic-sending call inside the kernel — identically to the bridge. The

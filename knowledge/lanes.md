@@ -3,10 +3,13 @@
 ## framework bridge lane
 
 The ONLY path to targets; all security/target work. OWUI tools:
-`framework_health`, `framework_search_tools`, `framework_run_tool`,
-`framework_memory_search`, `framework_scratch_search`. Scope gate covered
-(operator arms it). The model calls `framework_search_tools` first, picks a
-`tool_id` from the menu, then calls `framework_run_tool` with that exact
+`daharness_tools_execute`, `daharness_tools_search`,
+`daharness_memory_search`, `daharness_memory_recall`,
+`daharness_scratch_search`. No `daharness_health` wrapper exists on the
+bridge — health is the kernel-side `framework_health()` bare callable or
+REST `GET /health` on the gateway (port 5000 host-side). Scope gate covered
+(operator arms it). The model calls `daharness_tools_search` first, picks a
+`tool_id` from the menu, then calls `daharness_tools_execute` with that exact
 id. Per-turn tool budget enforced (`TOOL_BUDGET_PER_TURN`, default 10).
 
 ## execute_code lane

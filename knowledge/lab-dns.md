@@ -2,21 +2,31 @@
 
 > **Status: DECOMMISSIONED on this host (2026-11-18).** No dnsmasq runs on
 > kali anymore, and the compose `dns: 172.28.0.1` pins are gone. The jupyter
-> service now rides the internal workbench network (the kernel-lane sandbox:
-> no routed egress) — the only DNS path left there is Docker's embedded
-> resolver forwarding via the host's own upstream, so public names still
-> resolve container-side and lab names no longer do (they never needed to:
-> target resolution belongs to the host-side Brain executor and kali's
-> /etc/hosts). The doc below is retained as the re-enable reference — the
-> reprovision script still exists in the dadeb tree
-> (`packaging/reference/lab-dns-setup.sh`); re-enabling means reinstalling
-> it and re-adding the `dns:` entry to the jupyter service.
+> service rides the internal workbench network (the kernel-lane sandbox: no
+> routed egress). DNS posture measured 2026-11-22, both lanes: **public
+> names do NOT resolve container-side** — `dig example.com` → SERVFAIL and
+> TCP `1.1.1.1:443` → `[Errno 101] Network is unreachable` from either lane;
+> Docker's embedded `127.0.0.11` forwards nothing upstream (no route), so
+> the only working DNS lane use is service-name checks among the compose
+> peers (`dig +short jupyter` → `172.28.0.40`; `getent hosts jupyter
+> open-terminal open-webui`). Lab names never resolved container-side (they
+> never needed to: target resolution belongs to the host-side Brain
+> executor and kali's /etc/hosts). The doc below is retained as the
+> re-enable reference — the reprovision script still exists in the dadeb
+> tree (`packaging/reference/lab-dns-setup.sh`); re-enabling means
+> reinstalling it and re-adding the `dns:` entry to the jupyter service.
 >
-> Known residual: that host-resolver forwarding path is a covert-DNS channel
-> out of the internal network (data encoded in queried names exits unfiltered
-> through the host's resolver). Killing it means either a dnsmasq instance
-> with NO upstream forwarder bound on the bridge gateway, or an nft rule
-> filtering UDP/53 from the bridge subnet.
+> Known residual: the host-resolver forwarding path (when re-enabled, or via
+> any future route) is a covert-DNS channel out of the internal network
+> (data encoded in queried names exits unfiltered through the host's
+> resolver). TODAY the channel is closed by ROUTING — no default route, no
+> upstream forwarder exists to leak through, so there is nothing to
+> firewall; do not add an nft rule expecting to close a live leak. BUT its
+> safety hangs entirely on that route staying absent: if compose/dnsmasq
+> re-enables the `dns:` pin or a default route appears, the channel opens
+> with it — at that point either a dnsmasq instance with NO upstream
+> forwarder bound on the bridge gateway, or an nft rule filtering UDP/53
+> from the bridge subnet, becomes the actual containment.
 
 Shared lab hostname resolution across execution lanes (lab-environment
 setup, not part of the deb; the reprovision script lives in

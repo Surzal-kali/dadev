@@ -797,8 +797,8 @@ mapping, or new tool without an alias yet).
 
 | name | signature | notes |
 |---|---|---|
-| `run_tool` | `run_tool(tool_id, **kwargs)` | In-kernel equivalent of bridge `framework_run_tool`. Takes dotted `tool_id` (e.g. `"auxiliaries.web_probe.probe_web"`). Preferred fallback when a base name fails with `NameError`. |
-| `discover_tools` | `discover_tools(intent, top_k=N)` | In-kernel equivalent of bridge `framework_search_tools`. Returns candidate tool menu by semantic match. |
+| `run_tool` | `run_tool(tool_id, **kwargs)` | In-kernel equivalent of bridge `daharness_tools_execute`. Takes dotted `tool_id` (e.g. `"auxiliaries.web_probe.probe_web"`). Preferred fallback when a base name fails with `NameError`. |
+| `discover_tools` | `discover_tools(intent, top_k=N)` | In-kernel equivalent of bridge `daharness_tools_search`. Returns candidate tool menu by semantic match. |
 
 ### Scope management (read-only from kernel)
 
@@ -824,7 +824,7 @@ inspection**. They do not arm or disarm the gate.
 
 | name | signature | notes |
 |---|---|---|
-| `scratch` | `scratch(...)` | Scratch storage for large tool results (cf. `framework_scratch_search` on bridge) |
+| `scratch` | `scratch(...)` | Scratch storage for large tool results (cf. `daharness_scratch_search` on bridge) |
 | `reportable` | `reportable(...)` | Check if a finding/action is reportable under current scope |
 | `check_trigger` | `check_trigger(...)` | Check trigger condition (details TBD) |
 | `list_sessions` | `list_sessions()` | List active typed handles (`ssh`, `msf`, `listener`, `db`) across all namespaces |
